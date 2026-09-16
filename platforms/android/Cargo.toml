@@ -1,0 +1,28 @@
+[package]
+name = "mausfer-android"
+version.workspace = true
+edition.workspace = true
+
+# WebView2/Tauri mobile crates need a lib + bin split; keep it simple here.
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[features]
+# Packaging feature enabled by `cargo tauri build`: embeds the frontend
+# assets into the binary (custom protocol, not dev-server mode). Without it
+# WebView requests to http://tauri.localhost fail on Android.
+custom-protocol = ["tauri/custom-protocol"]
+mobile = []
+
+[lib]
+crate-type = ["staticlib", "cdylib"]
+
+[dependencies]
+mausfer-core = { path = "../../core" }
+mausfer-tauri-common = { path = "../tauri-common" }
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }

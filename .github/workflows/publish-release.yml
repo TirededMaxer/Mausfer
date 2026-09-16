@@ -1,0 +1,28 @@
+name: Publish Tested Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tested draft tag to publish, e.g. v0.1.2'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify draft, publish, then remove older Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: python3 scripts/ci/release.py publish "$RELEASE_TAG"

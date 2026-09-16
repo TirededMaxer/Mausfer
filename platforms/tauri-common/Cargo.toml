@@ -1,0 +1,14 @@
+[package]
+name = "mausfer-tauri-common"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+mausfer-core = { path = "../../core" }
+tauri = { version = "2", features = ["wry", "tray-icon"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+tauri-plugin-notification = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"

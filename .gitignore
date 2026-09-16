@@ -1,0 +1,36 @@
+/target
+**/target
+/.cargo/**
+!/.cargo/config.toml
+/.rustup
+*.log
+.DS_Store
+.idea
+.vscode
+*.iml
+/.xwin
+/.zig-cache
+/.gradle-home
+/.toolchain
+/hdiutil-out
+
+# Build outputs and private signing material
+/dist/
+**/build/
+**/.gradle/
+**/local.properties
+**/tauri.settings.gradle
+**/src/main/jniLibs/
+*.keystore
+*.jks
+__pycache__/
+*.pyc
+
+# Generated schemas, local environment and transient tooling data
+/platforms/*/gen/schemas/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+**/.kotlin/errors/

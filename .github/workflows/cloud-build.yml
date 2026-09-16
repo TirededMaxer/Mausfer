@@ -1,0 +1,253 @@
+name: Cloud Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      draft_tag:
+        description: 'Optional new Release tag, e.g. v0.1.2. Empty: build artifacts only.'
+        required: false
+        type: string
+        default: ''
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloud-build-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  RUST_VERSION: '1.98.0'
+  CARGO_TERM_COLOR: always
+
+jobs:
+  checks:
+    uses: ./.github/workflows/ci.yml
+
+  desktop:
+    name: Desktop (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows
+            runner: windows-2022
+            target: x86_64-pc-windows-msvc
+          - platform: macos
+            runner: macos-15
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Rust
+        run: rustup toolchain install "$RUST_VERSION" --profile minimal --target '${{ matrix.target }}' && rustup override set "$RUST_VERSION"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: desktop-${{ matrix.target }}
+      - name: Build native application and installers
+        working-directory: platforms/${{ matrix.platform }}
+        env:
+          APPLE_SIGNING_IDENTITY: '-'
+        run: npx --yes --package @tauri-apps/cli@2.11.4 tauri build --ci --target '${{ matrix.target }}' -- --locked
+      - name: Package desktop artifacts
+        run: python scripts/ci/package.py '${{ matrix.platform }}'
+      - uses: actions/upload-artifact@v7
+        with:
+          name: package-${{ matrix.platform }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  android-native:
+    name: Android native (${{ matrix.arch }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: aarch64
+            target: aarch64-linux-android
+            abi: arm64-v8a
+          - arch: armv7
+            target: armv7-linux-androideabi
+            abi: armeabi-v7a
+          - arch: x86_64
+            target: x86_64-linux-android
+            abi: x86_64
+          - arch: x86
+            target: i686-linux-android
+            abi: x86
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Rust
+        run: rustup toolchain install "$RUST_VERSION" --profile minimal --target '${{ matrix.target }}' && rustup override set "$RUST_VERSION"
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: android-sources-${{ hashFiles('Cargo.lock') }}
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v4
+        with:
+          packages: 'ndk;26.3.11579264'
+          log-accepted-android-sdk-licenses: false
+      - name: Build native library and Kotlin bridge from source
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/26.3.11579264"
+          bash platforms/android/build_android.sh release '${{ matrix.arch }}'
+          mkdir -p 'native-output/${{ matrix.abi }}'
+          cp 'platforms/android/gen/android/app/src/main/jniLibs/${{ matrix.abi }}/libmausfer_android.so' 'native-output/${{ matrix.abi }}/'
+          if [ '${{ matrix.arch }}' = aarch64 ]; then
+            mkdir -p native-output/bridge
+            cp -R platforms/android/gen/android/app/src/main/java/com/mausfer/app/generated native-output/bridge/
+            cp platforms/android/gen/android/app/proguard-tauri.pro native-output/bridge/
+          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: android-native-${{ matrix.arch }}
+          path: native-output/
+          if-no-files-found: error
+          retention-days: 1
+
+  android:
+    name: Android signed APK
+    needs: android-native
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Rust metadata resolver
+        run: rustup toolchain install "$RUST_VERSION" --profile minimal && rustup override set "$RUST_VERSION"
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: android-sources-${{ hashFiles('Cargo.lock') }}
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+          cache-dependency-path: |
+            platforms/android/gen/android/**/*.gradle*
+            platforms/android/gen/android/gradle/wrapper/gradle-wrapper.properties
+      - uses: android-actions/setup-android@v4
+        with:
+          packages: 'platforms;android-36 build-tools;36.0.0'
+          log-accepted-android-sdk-licenses: false
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: android-native-*
+          merge-multiple: true
+          path: native-output
+      - name: Prepare Gradle and native files
+        run: |
+          python3 platforms/android/prepare_gradle.py
+          mkdir -p platforms/android/gen/android/app/src/main/jniLibs
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+            cp -R "native-output/$abi" platforms/android/gen/android/app/src/main/jniLibs/
+          done
+          cp -R native-output/bridge/generated platforms/android/gen/android/app/src/main/java/com/mausfer/app/
+          cp native-output/bridge/proguard-tauri.pro platforms/android/gen/android/app/
+      - name: Restore release signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.MAUSFER_ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          python3 - <<'PY'
+          import base64, os
+          from pathlib import Path
+          value = os.environ['KEYSTORE_BASE64']
+          if not value:
+              raise SystemExit('MAUSFER_ANDROID_KEYSTORE_BASE64 is required for the signed release APK')
+          key = Path(os.environ['RUNNER_TEMP']) / 'mausfer-release.keystore'
+          key.write_bytes(base64.b64decode(value, validate=True))
+          key.chmod(0o600)
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write(f'MAUSFER_KEYSTORE={key}\n')
+          PY
+      - name: Build signed universal APK
+        env:
+          MAUSFER_STORE_PASSWORD: ${{ secrets.MAUSFER_STORE_PASSWORD }}
+          MAUSFER_KEY_ALIAS: ${{ secrets.MAUSFER_KEY_ALIAS }}
+          MAUSFER_KEY_PASSWORD: ${{ secrets.MAUSFER_KEY_PASSWORD }}
+        run: platforms/android/gen/android/gradlew -p platforms/android/gen/android --no-daemon :app:assembleUniversalRelease
+      - name: Verify APK signature and package
+        run: |
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs platforms/android/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk > "$RUNNER_TEMP/apk-certificate.txt"
+          grep -i 'b481715ead87505701a49073b4f567bb6567a814772d6d0033203abed6df7060' "$RUNNER_TEMP/apk-certificate.txt"
+          python3 scripts/ci/package.py android
+      - name: Remove temporary signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/mausfer-release.keystore"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: package-android
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  signaling:
+    name: Signaling server
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+          cache-dependency-path: signaling-server/pom.xml
+      - run: mvn --batch-mode -f signaling-server/pom.xml verify
+      - run: python3 -m unittest discover -s signaling-server/tests -v
+      - run: python3 scripts/ci/package.py signaling
+      - uses: actions/upload-artifact@v7
+        with:
+          name: package-signaling
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  collect:
+    name: Collect packages and optional Release draft
+    needs: [checks, desktop, android, signaling]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: package-*
+          merge-multiple: true
+          path: dist
+      - name: Verify complete package set and write checksums
+        run: python3 scripts/ci/package.py checksums
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Mausfer-packages
+          path: dist/*
+          retention-days: 7
+          if-no-files-found: error
+      - name: Create or resume Release draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRAFT_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.draft_tag }}
+        run: |
+          if [ -n "$DRAFT_TAG" ]; then
+            python3 scripts/ci/release.py draft "$DRAFT_TAG"
+          fi
