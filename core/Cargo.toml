@@ -1,0 +1,22 @@
+[package]
+name = "mausfer-core"
+version.workspace = true
+edition.workspace = true
+description = "Platform-independent core of Mausfer: config, discovery, transfer, P2P"
+license.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+dirs = { workspace = true }
+chrono = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+socket2 = { workspace = true }
+webrtc = { workspace = true }
+tokio = { workspace = true }
+futures-util = { workspace = true }
+tokio-tungstenite = { workspace = true }
+rand = { workspace = true }
+bytes = "1"
+url = "2"
