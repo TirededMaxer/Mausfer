@@ -1,0 +1,947 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Mausfer</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --panel: #161b22;
+      --panel2: #1f2630;
+      --border: #2b3442;
+      --text: #e6edf3;
+      --muted: #8b98a5;
+      --accent: #4f8cff;
+      --accent2: #3a6fd8;
+      --ok: #34c76f;
+      --err: #f0605e;
+    }
+    #transfer-progress[hidden] { display: none; }
+    #transfer-progress { flex: 0 0 auto; display: grid; gap: 10px; }
+    .transfer-meter { padding: 12px 16px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; }
+    .transfer-meter-label { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; margin-bottom: 8px; }
+    .transfer-meter progress { display: block; width: 100%; height: 10px; accent-color: var(--accent); }
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+      margin: 0; background: var(--bg); color: var(--text);
+      height: 100vh; height: 100dvh; overflow: hidden; font-size: 14px;
+      display: flex; flex-direction: column;
+    }
+
+    /* ---------- Header ---------- */
+    header {
+      flex: 0 0 auto;
+      display: flex; align-items: center; gap: 12px;
+      padding: 14px 22px;
+      background: linear-gradient(180deg, #1a2230 0%, #131a24 100%);
+      border-bottom: 1px solid var(--border);
+    }
+    header h1 {
+      font-size: 19px; margin: 0; letter-spacing: .02em;
+      background: linear-gradient(90deg, #7cb3ff, #b18cff);
+      -webkit-background-clip: text; background-clip: text;
+      -webkit-text-fill-color: transparent; font-weight: 700;
+    }
+    header .sub { color: var(--muted); font-size: 12.5px; }
+    header .spacer { flex: 1; }
+    .badge {
+      font-size: 12px; padding: 4px 12px; border-radius: 999px;
+      background: rgba(255,255,255,.05); color: var(--muted); border: 1px solid var(--border);
+    }
+    .badge.ok { background: rgba(52,199,111,.12); color: var(--ok); border-color: rgba(52,199,111,.3); }
+    .badge.err { background: rgba(240,96,94,.12); color: var(--err); border-color: rgba(240,96,94,.3); }
+    .badge.load { animation: pulse 1.4s ease-in-out infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.5} }
+
+    /* ---------- Layout ---------- */
+    main {
+      display: grid; grid-template-columns: 1fr 360px; gap: 16px;
+      padding: 16px 22px; flex: 1;
+      min-width: 0; min-height: 0;
+    }
+    /* DOM order = mobile priority (remote files, peers, status, then
+       drop+log); explicit grid placement keeps the desktop two-column
+       layout: drop+log on the left, cards on the right. */
+    .col-left { grid-column: 1; grid-row: 1; }
+    .col-right { grid-column: 2; grid-row: 1; }
+    .col-left, .col-right { display: flex; flex-direction: column; gap: 16px; min-height: 0; min-width: 0; }
+    .col-right { overflow-y: auto; padding-right: 2px; }
+    .card {
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: 14px; padding: 16px;
+      box-shadow: 0 4px 24px rgba(0,0,0,.25);
+    }
+    .card h2 {
+      margin: 0 0 12px; font-size: 13px; color: var(--muted);
+      font-weight: 600; text-transform: uppercase; letter-spacing: .07em;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .card h2 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+
+    /* ---------- Drop zone ---------- */
+    #drop {
+      flex: 0 0 30%; min-height: 160px;
+      border: 2px dashed #3a4a5e; border-radius: 14px;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 10px; cursor: pointer; background: rgba(255,255,255,.02);
+      transition: border-color .18s, background .18s, transform .12s;
+    }
+    #drop:hover, #drop.drag { border-color: var(--accent); background: rgba(79,140,255,.07); }
+    #drop.drag { transform: scale(1.005); }
+    #drop .big { font-size: 34px; color: var(--accent); line-height: 1; }
+    #drop .title { font-size: 16px; font-weight: 600; }
+    #drop .hint { color: var(--muted); font-size: 12.5px; text-align: center; padding: 0 20px; line-height: 1.6; }
+    #fileInfo {
+      margin-top: 8px; font-size: 13px; color: var(--ok);
+      background: rgba(52,199,111,.08); border: 1px solid rgba(52,199,111,.2);
+      border-radius: 8px; padding: 6px 12px; word-break: break-all; max-width: 90%;
+      display: none;
+    }
+    #fileInfo.show { display: block; }
+    .ellipsis {
+      display: inline-block;
+      max-width: 100%;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      vertical-align: bottom;
+    }
+
+    /* ---------- Transfer log (big) ---------- */
+    #logCard { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+    #logCard h2 { justify-content: space-between; }
+    #logCard .count { font-size: 11px; color: var(--muted); font-weight: 400; text-transform: none; letter-spacing: 0; }
+    #log {
+      list-style: none; margin: 0; padding: 0; overflow-y: auto;
+      flex: 1; min-height: 0; font-size: 13px; min-width: 0;
+      overflow-x: hidden;
+    }
+    #log li {
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,.04);
+      border-radius: 6px; max-width: 100%; min-width: 0;
+    }
+    #log li:hover { background: rgba(255,255,255,.03); }
+    #log li .t {
+      color: var(--muted); font-size: 11.5px; font-family: ui-monospace, monospace;
+      flex: 0 0 auto; width: 62px;
+    }
+    #log li .msg { flex: 1 1 0; line-height: 1.45; min-width: 0; overflow: hidden; }
+    #log li .msg .full {
+      display: block; width: 100%; max-width: 100%; overflow: hidden;
+      white-space: nowrap; text-overflow: ellipsis;
+    }
+    #log li .msg .ellipsis { color: var(--muted); }
+    #log li .icon { flex: 0 0 auto; font-size: 15px; }
+    #log li.ok .msg { color: #9fd8b2; }
+    #log li.err .msg { color: #f2a5a3; }
+    #log li.info .msg { color: #b3c2d1; }
+    /* Any overly long text anywhere must truncate on one line with an
+       ellipsis — never grow the layout. */
+    .truncate {
+      display: block; max-width: 100%; overflow: hidden;
+      white-space: nowrap; text-overflow: ellipsis;
+    }
+    #log .empty { display: block; padding: 24px 0; color: var(--muted); text-align: center; }
+
+    /* ---------- Copy toast (floating bubble) ---------- */
+    .toast {
+      position: fixed; left: 50%; bottom: 48px;
+      transform: translateX(-50%) translateY(16px);
+      background: rgba(20,30,46,.96); color: #9fd8b2;
+      border: 1px solid rgba(52,199,111,.35); border-radius: 999px;
+      padding: 8px 20px; font-size: 13px; font-weight: 600;
+      pointer-events: none; opacity: 0; z-index: 999;
+      transition: opacity .18s ease, transform .18s ease;
+      box-shadow: 0 8px 24px rgba(0,0,0,.4);
+    }
+    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+    /* ---------- Remote: receive/send two blocks ---------- */
+    .remote-block {
+      border: 1px solid var(--border); border-radius: 12px;
+      padding: 12px 14px; margin-bottom: 12px; background: rgba(255,255,255,.02);
+    }
+    .remote-block:last-child { margin-bottom: 0; }
+    .remote-block .rb-title {
+      font-size: 13px; font-weight: 600; margin-bottom: 8px;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .remote-block .rb-sub { font-size: 11.5px; color: var(--muted); margin-bottom: 8px; line-height: 1.5; }
+    .code-list { margin: 6px 0 4px; }
+    .code-item {
+      display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+      background: var(--panel2); border-radius: 8px; margin-bottom: 6px;
+    }
+    .code-item .ccode {
+      flex: 1; font-family: ui-monospace, monospace; font-size: 13px;
+      letter-spacing: .04em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .code-item button { flex: 0 0 auto; }
+    .listen-status { color: var(--ok); font-size: 12px; margin: 4px 0 8px; min-height: 16px; }
+
+    .network-input, #signaling-url, #room-code {
+      width: 100%; padding: 10px 12px; border-radius: 9px;
+      border: 1px solid var(--border); background: var(--panel2); color: var(--text);
+      font-size: 14px; letter-spacing: .08em; text-align: center;
+      font-family: ui-monospace, monospace; margin-bottom: 10px;
+    }
+    #signaling-url:focus, #room-code:focus { outline: none; border-color: var(--accent); }
+    .remote-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+    /* ---------- Peers ---------- */
+    #peers { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+    #peers li {
+      display: flex; align-items: center; gap: 10px; padding: 11px 12px;
+      background: var(--panel2); border: 1px solid rgba(255,255,255,.04);
+      border-radius: 10px; font-size: 14px;
+    }
+    #peers li .device-ico { font-size: 18px; }
+    #peers li .name { flex: 1; font-weight: 500; }
+    #peers li .meta { color: var(--muted); font-size: 12px; }
+    #peers li button {
+      border: none; border-radius: 8px; padding: 7px 14px;
+      background: linear-gradient(180deg, var(--accent), var(--accent2));
+      color: #fff; cursor: pointer; font-size: 13px; font-weight: 500;
+      transition: filter .12s;
+    }
+    #peers li button:hover { filter: brightness(1.15); }
+    #peers li button:disabled { background: #303a47; color: #7a8694; cursor: not-allowed; }
+    #peers .empty { display: block; padding: 16px 0; color: var(--muted); text-align: center; font-size: 13px; }
+
+    /* ---------- Status ---------- */
+    #status { font-size: 12.5px; color: var(--muted); line-height: 1.9; }
+    #status b { color: var(--text); font-weight: 600; }
+    #status .kv { display: flex; gap: 8px; }
+    #status .kv .k { flex: 0 0 68px; }
+
+    /* ---------- Buttons ---------- */
+    button.ghost {
+      background: rgba(255,255,255,.04); border: 1px solid var(--border);
+      color: var(--text); border-radius: 9px; padding: 7px 14px;
+      cursor: pointer; font-size: 13px; font-weight: 500;
+      transition: border-color .12s, background .12s;
+    }
+    button.ghost:hover { border-color: var(--accent); background: rgba(79,140,255,.1); }
+    button.ghost:active { transform: translateY(1px); }
+    button.primary {
+      background: linear-gradient(180deg, var(--accent), var(--accent2));
+      border: none; color: #fff; border-radius: 9px; padding: 8px 16px;
+      cursor: pointer; font-size: 13px; font-weight: 500;
+    }
+    button.primary:disabled { background: #303a47; color: #7a8694; cursor: not-allowed; }
+    button.primary:not(:disabled):hover { filter: brightness(1.12); }
+
+    /* ---------- Scrollbar ---------- */
+    ::-webkit-scrollbar { width: 9px; height: 9px; }
+    ::-webkit-scrollbar-thumb { background: #2c3a4a; border-radius: 8px; }
+    ::-webkit-scrollbar-thumb:hover { background: #3a4a5e; }
+    ::-webkit-scrollbar-track { background: transparent; }
+
+    /* ---------- Mobile (Android / narrow screens) ---------- */
+    @media (max-width: 900px) {
+      html, body { overflow: hidden; }
+      body {
+        padding: 0; margin: 0;
+        -webkit-tap-highlight-color: transparent;
+      }
+      header {
+        padding: 10px 14px;
+        padding-top: calc(10px + env(safe-area-inset-top, 0px));
+        gap: 8px;
+        position: sticky; top: 0; z-index: 10;
+      }
+      header h1 { font-size: 16px; }
+      header .sub { display: none; }
+      main {
+        display: flex; flex-direction: column;
+        padding: 10px 12px calc(14px + env(safe-area-inset-bottom, 0px));
+        gap: 12px;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+      }
+      .col-left { display: contents; }   /* let cards flow directly */
+      .col-right { display: contents; }
+      .card { flex-shrink: 0; padding: 12px 14px; border-radius: 12px; }
+      .card h2 { font-size: 12px; margin-bottom: 10px; }
+      /* drop zone: small banner, not a giant box */
+      #drop {
+        flex: none;
+        min-height: 0;
+        padding: 10px;
+        gap: 4px;
+        text-align: left;
+        flex-direction: row;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: flex-start;
+      }
+      #drop .big { font-size: 22px; flex-shrink: 0; }
+      #drop .title { font-size: 13px; flex-shrink: 0; }
+      #drop #fileInfo { flex-basis: 100%; min-width: 0; }
+      #drop .hint { display: none; }
+      /* log card: fixed scrollable height, never grows */
+      #logCard {
+        flex: none;
+        height: 200px;
+        display: flex; flex-direction: column;
+      }
+      #log { flex: 1; min-height: 0; }
+      .col-right .card { width: 100%; }
+      #status .kv b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      /* big touch targets */
+      button.primary, button.ghost { min-height: 42px; font-size: 14px; }
+      input#room-code { min-height: 44px; font-size: 15px; }
+    }
+  </style>
+</head>
+<body data-lang="zh">
+  <header>
+    <h1>Mausfer</h1>
+    <span class="sub" id="subtitle">局域网 &amp; 远程 P2P 文件传输</span>
+    <span class="spacer"></span>
+    <button class="ghost" id="lang-toggle" style="font-size:12px; padding:4px 10px;">EN</button>
+    <span class="badge load" id="mode-badge">连接中…</span>
+  </header>
+
+  <main>
+    <!-- ================= 左列：拖放 + 传输日志 ================= -->
+
+    <section class="col-right">
+      <div class="card">
+        <h2><span class="dot"></span><span data-i18n="remoteTitle">远程文件</span></h2>
+
+        <div class="remote-block">
+          <label class="rb-title" for="signaling-url" data-i18n="signalServer">信令服务器</label>
+          <input type="url" id="signaling-url" autocomplete="off" spellcheck="false" aria-label="信令服务器">
+          <div id="signaling-status" role="status" aria-live="polite" style="overflow-wrap:anywhere">信令服务器：未连接</div>
+          <button class="ghost" id="save-signaling" data-i18n="saveSignal">保存服务器</button>
+        </div>
+
+        <details class="remote-block">
+          <summary data-i18n="advancedNetwork">高级网络设置</summary>
+          <label for="stun-url">STUN</label><input class="network-input" id="stun-url" autocomplete="off" spellcheck="false">
+          <label for="turn-url">TURN</label><input class="network-input" id="turn-url" autocomplete="off" spellcheck="false">
+          <label for="turn-username" data-i18n="turnUser">TURN 用户名</label><input class="network-input" id="turn-username" autocomplete="off">
+          <label for="turn-password" data-i18n="turnPassword">TURN 密码</label><input class="network-input" id="turn-password" type="password" autocomplete="off">
+          <button class="ghost" id="save-network" data-i18n="saveNetwork">保存网络设置</button>
+        </details>
+
+        <!-- 接收块 -->
+        <div class="remote-block">
+          <div class="rb-title">📥 <span data-i18n="recvTitle">接收文件</span></div>
+          <div class="rb-sub" data-i18n="recvSub">开始后生成连接码，发给对方即可传文件</div>
+          <div style="display:flex; gap:8px; align-items:center;">
+            <button class="primary" id="recv-start" data-i18n="recvStart">开始接收</button>
+            <button class="ghost" id="recv-stop" style="display:none;" data-i18n="recvStop">停止接收</button>
+          </div>
+          <div class="listen-status" id="recv-status"></div>
+          <div class="code-list" id="recv-codes"></div>
+        </div>
+
+        <!-- 发送块 -->
+        <div class="remote-block">
+          <div class="rb-title">📤 <span data-i18n="sendTitle">发送文件</span></div>
+          <div class="rb-sub" data-i18n="sendSub">选择文件并输入对方连接码</div>
+          <input type="text" id="room-code" placeholder="XXXX-XXXX-XXXX-XXXX" maxlength="19" autocomplete="off" spellcheck="false">
+          <div class="remote-actions">
+            <button class="primary" id="remote-send-btn" data-i18n="sendBtn">发送所选文件</button>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="card">
+        <h2><span class="dot"></span><span data-i18n="peersTitle">附近设备</span> <button class="ghost" id="refresh" style="float:right" data-i18n="refresh">刷新</button></h2>
+        <ul id="peers"><li class="empty" data-i18n="peersScan">正在扫描…</li></ul>
+      </div>
+
+      <div class="card">
+        <h2><span class="dot"></span><span data-i18n="statusTitle">本机状态</span></h2>
+        <div id="status">…</div>
+      </div>
+    </section>
+
+    <section class="col-left">
+      <div id="drop">
+        <div class="big">⬇</div>
+        <div class="title" data-i18n="dropTitle">把文件拖到这里</div>
+        <div class="hint" data-i18n="dropHint">或点击选择文件，然后在右侧选择目标设备</div>
+        <div id="fileInfo"></div>
+      </div>
+
+      <div id="transfer-progress" hidden aria-live="polite"></div>
+
+      <div class="card" id="logCard">
+        <h2><span class="dot"></span><span data-i18n="logTitle">传输日志</span> <span class="count" id="log-count">0</span></h2>
+        <ul id="log"><li class="empty" data-i18n="logEmpty">暂无记录</li></ul>
+      </div>
+    </section>
+
+    <!-- ================= 右列 ================= -->
+  </main>
+
+  <script>
+    // =====================================================================
+    // Mausfer 前端 v3
+    // - 全局中英文（localStorage 保存）
+    // - 远程：单连接码，自动 ICE 直连 / TURN 中继
+    // - 传输日志：省略号 + 悬停完整 + 左键复制
+    // =====================================================================
+    (function () {
+      "use strict";
+      var $ = function (id) { return document.getElementById(id); };
+
+      /* ---------- i18n ---------- */
+      var I18N = {
+        zh: {
+          dropTitle: "把文件拖到这里", dropHint: "或点击选择文件，然后在右侧选择目标设备",
+          logTitle: "传输日志", logEmpty: "暂无记录",
+          remoteTitle: "远程文件",
+          recvTitle: "接收文件", recvSub: "开始后生成连接码，发给对方即可传文件",
+          recvStart: "开始接收", recvStop: "停止接收",
+          recvListening: "正在等待对方连接",
+          recvStopped: "已停止接收",
+          recvCopy: "复制",
+          sendTitle: "发送文件", sendSub: "选择文件并输入对方连接码",
+          sendBtn: "发送所选文件", selectFirst: "请先选择文件", codeRequired: "请输入连接码",
+          peersTitle: "附近设备", refresh: "刷新", peersScan: "正在扫描…", peersNone: "未发现设备（请确认对方已打开 Mausfer）",
+          peersFail: "无法获取设备列表", statusTitle: "本机状态",
+          advancedNetwork: "高级网络设置", turnUser: "TURN 用户名", turnPassword: "TURN 密码", saveNetwork: "保存网络设置", networkSaved: "网络设置已保存，下次连接生效",
+          signalServer: "信令服务器", saveSignal: "保存服务器", signalSaved: "服务器已保存，下次连接生效",
+          deviceName: "设备名", deviceId: "设备 ID", port: "传输端口", downloadDir: "下载目录", configPath: "配置",
+          openConfig: "打开配置文件目录", openedConfig: "已打开配置目录",
+          stRun: "运行中", stConnecting: "连接中…", stErr: "后端失败", stNoEnv: "未检测到 Tauri 运行时",
+          copying: "（点击复制）", copied: "已复制",
+          sent: "发送", sendDone: "发送完成", sendFail: "发送失败",
+          recvDone: "收到", recvFail: "接收失败",
+          selected: "已选择", bytes: "字节", fileOpenFail: "读取文件失败",
+          startRecvFail: "启动接收失败", sendStarted: "发送",
+          errPickFile: "打开文件选择器失败",
+          changeDl: "修改下载目录", dlChanged: "下载目录已改为", dlChangeFail: "无法修改下载目录"
+        },
+        en: {
+          dropTitle: "Drop files here", dropHint: "or click to choose a file, then pick a target on the right",
+          logTitle: "Transfer Log", logEmpty: "No records yet",
+          remoteTitle: "Remote Files",
+          recvTitle: "Receive", recvSub: "Start to get a connection code; share it with the sender",
+          recvStart: "Start Receiving", recvStop: "Stop",
+          recvListening: "Waiting for the sender",
+          recvStopped: "Receiving stopped",
+          recvCopy: "Copy",
+          sendTitle: "Send", sendSub: "Select a file and enter the receiver's code",
+          sendBtn: "Send Selected File", selectFirst: "Select a file first", codeRequired: "Enter a code",
+          peersTitle: "Nearby Devices", refresh: "Refresh", peersScan: "Scanning…", peersNone: "No devices (make sure the peer opened Mausfer)",
+          peersFail: "Cannot list devices", statusTitle: "Local Status",
+          advancedNetwork: "Advanced network settings", turnUser: "TURN username", turnPassword: "TURN password", saveNetwork: "Save network settings", networkSaved: "Network settings saved for the next connection",
+          signalServer: "Signaling server", saveSignal: "Save server", signalSaved: "Server saved for the next connection",
+          deviceName: "Device", deviceId: "Device ID", port: "Port", downloadDir: "Download dir", configPath: "Config",
+          openConfig: "Open Config Folder", openedConfig: "Config folder opened",
+          stRun: "Running", stConnecting: "Connecting…", stErr: "Backend Error", stNoEnv: "Tauri runtime not detected",
+          copying: "(click to copy)", copied: "Copied",
+          sent: "Send", sendDone: "Sent", sendFail: "Send failed",
+          recvDone: "Received", recvFail: "Receive failed",
+          selected: "Selected", bytes: "bytes", fileOpenFail: "Cannot read file",
+          startRecvFail: "Cannot start receiving", sendStarted: "Sending",
+          errPickFile: "Cannot open file picker",
+          changeDl: "Change Download Folder", dlChanged: "Download folder changed to", dlChangeFail: "Cannot change download folder"
+        }
+      };
+
+      var lang = localStorage.getItem("mausfer.lang") || "zh";
+      function t(key) {
+        var dict = I18N[lang] || I18N.zh;
+        return dict[key] != null ? dict[key] : (I18N.zh[key] != null ? I18N.zh[key] : key);
+      }
+
+      function applyLang() {
+        document.querySelectorAll("[data-i18n]").forEach(function (el) {
+          el.textContent = t(el.getAttribute("data-i18n"));
+        });
+        $("lang-toggle").textContent = lang === "zh" ? "EN" : "中";
+        document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
+        // Rerender dynamic bits
+        renderReceiveCode();
+        if (backendReady && typeof refreshStatus === "function") refreshStatus();
+        if (backendReady && typeof refreshPeers === "function") {
+          peersRenderKey = "";
+          refreshPeers();
+        }
+      }
+
+      $("lang-toggle").onclick = function () {
+        lang = lang === "zh" ? "en" : "zh";
+        localStorage.setItem("mausfer.lang", lang);
+        applyLang();
+      };
+
+      /* ---------- invoke 双通道 ---------- */
+      function getInvoke() {
+        try {
+          if (window.__TAURI__ && window.__TAURI__.core &&
+              typeof window.__TAURI__.core.invoke === "function")
+            return window.__TAURI__.core.invoke.bind(window.__TAURI__.core);
+        } catch (e) {}
+        try {
+          if (window.__TAURI_INTERNALS__ &&
+              typeof window.__TAURI_INTERNALS__.invoke === "function")
+            return window.__TAURI_INTERNALS__.invoke.bind(window.__TAURI_INTERNALS__);
+        } catch (e) {}
+        return null;
+      }
+      var invoke = getInvoke();
+
+      /* ---------- 传输日志 ---------- */
+      var logCount = 0;
+      var MAX_LOG = 50; // cap the list so it can never grow unbounded
+      function log(text, type) {
+        type = type || "info";
+        var ul = $("log");
+        if (!ul) return;
+        var empty = ul.querySelector(".empty");
+        if (empty) ul.innerHTML = "";
+        var li = document.createElement("li");
+        var icon = type === "ok" ? "✓" : (type === "err" ? "✕" : "·");
+        var tc = document.createElement("span"); tc.className = "t";
+        tc.textContent = new Date().toLocaleTimeString();
+        var m = document.createElement("span"); m.className = "msg";
+        var full = document.createElement("span"); full.className = "full";
+        full.textContent = text;
+        full.title = text;
+        // 左键点击复制：只复制文本并显示气泡提示，不再追加日志
+        // （避免点击日志行时把整行文本再次记入日志，导致无限堆积）。
+        full.addEventListener("click", function () { copyText(text); });
+        m.appendChild(full);
+        var ic = document.createElement("span"); ic.className = "icon"; ic.textContent = icon;
+        li.appendChild(ic); li.appendChild(tc); li.appendChild(m);
+        li.className = type;
+        ul.insertBefore(li, ul.firstChild);
+        // Trim the tail once over the cap.
+        while (ul.children.length > MAX_LOG) {
+          ul.removeChild(ul.lastChild);
+        }
+        logCount = ul.children.length;
+        $("log-count").textContent = logCount;
+      }
+
+      /* ---------- 剪贴板 ---------- */
+      // Copy text and show a small floating "已复制" toast (auto-dismiss).
+      // Never writes a log line: logging copies would re-log the copied text
+      // and grow the log list unboundedly.
+      var toastTimer = null;
+      function showToast(text) {
+        var el = $("toast");
+        if (!el) return;
+        el.textContent = text;
+        el.classList.add("show");
+        if (toastTimer) clearTimeout(toastTimer);
+        toastTimer = setTimeout(function () { el.classList.remove("show"); }, 1600);
+      }
+      function copyText(text) {
+        function done() { showToast(t("copied")); }
+        function fallback() {
+          try {
+            var ta = document.createElement("textarea");
+            ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+            document.body.appendChild(ta); ta.select();
+            document.execCommand("copy"); document.body.removeChild(ta);
+            done();
+          } catch (e) { showToast(t("copied") + "?"); }
+        }
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(done, fallback);
+        } else fallback();
+      }
+
+      function setStatus(html) { var el = $("status"); if (el) el.innerHTML = html; }
+      function showBadge(text, cls) {
+        var b = $("mode-badge");
+        b.textContent = text;
+        b.className = "badge" + (cls ? " " + cls : "");
+      }
+      function escapeHtml(s) {
+        return String(s).replace(/[&<>"']/g, function (c) {
+          return { "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[c];
+        });
+      }
+
+      var backendReady = false;
+      if (!invoke) {
+        showBadge(t("stErr"), "err");
+        setStatus(t("stNoEnv"));
+        return;
+      }
+      showBadge(t("stConnecting"), "load");
+
+      /* ---------- 状态 ---------- */
+      $("signaling-url").oninput = function () { this.dataset.edited = "true"; };
+      $("save-signaling").onclick = function () {
+        var button = this;
+        button.disabled = true;
+        invoke("set_signaling_url", { address: $("signaling-url").value })
+          .then(function (address) {
+            $("signaling-url").value = address;
+            delete $("signaling-url").dataset.edited;
+            log(t("signalSaved"), "ok");
+            refreshSignalingStatus();
+          }).catch(function (e) { log(String(e), "err"); })
+          .finally(function () { button.disabled = false; });
+      };
+      ["stun-url", "turn-url", "turn-username", "turn-password"].forEach(function (id) {
+        $(id).oninput = function () { this.dataset.edited = "true"; };
+      });
+      $("save-network").onclick = function () {
+        var button = this;
+        button.disabled = true;
+        invoke("set_ice_settings", { stun: $("stun-url").value, turn: $("turn-url").value,
+          username: $("turn-username").value, password: $("turn-password").value })
+          .then(function () { log(t("networkSaved"), "ok"); })
+          .catch(function (e) { log(String(e), "err"); })
+          .finally(function () { button.disabled = false; });
+      };
+      function refreshSignalingStatus() {
+        invoke("get_signaling_status").then(function (s) {
+          var labels = document.body.dataset.lang === "en"
+            ? { unconfigured: "Not configured", connecting: "Connecting…", connected: "Connected", failed: "Disconnected — retrying" }
+            : { unconfigured: "未设置", connecting: "连接中…", connected: "已连接", failed: "连接失败，正在重试" };
+          var el = $("signaling-status");
+          el.textContent = (document.body.dataset.lang === "en" ? "Signaling: " : "信令服务器：") +
+            (labels[s.state] || s.state) + (s.message ? " · " + s.message : "");
+          el.style.color = s.state === "connected" ? "var(--ok)" : s.state === "failed" ? "var(--err)" : "var(--muted)";
+        }).catch(function (e) { $("signaling-status").textContent = String(e); });
+      }
+      function refreshStatus() {
+        invoke("get_status").then(function (s) {
+          showBadge(t("stRun"), "ok");
+          ["stun-url", "turn-url", "turn-username", "turn-password"].forEach(function (id) {
+            if (!$(id).dataset.edited) $(id).value = s[id.replace(/-/g, "_")] || "";
+          });
+          // 路径 span: 悬停完整 + 左键复制
+          var dl = escapeHtml(s.desktop ? s.download_dir : "Download");
+          if (!$("signaling-url").dataset.edited) $("signaling-url").value = s.signaling_url || "";
+          setStatus(
+            '<div class="kv"><span class="k">' + t("deviceName") + '</span><b>' + escapeHtml(s.device_name) + "</b></div>" +
+            '<div class="kv"><span class="k">' + t("deviceId") + '</span><b>' + escapeHtml(s.device_id) + "</b></div>" +
+            '<div class="kv"><span class="k">' + t("port") + '</span><b>' + s.port + "</b></div>" +
+            '<div class="kv"><span class="k">' + t("downloadDir") + '</span><b class="copyable" data-path="' + dl + '">' + dl + "</b></div>" +
+            '<button class="ghost" id="change-dl-btn" style="margin-top:10px; width:100%">' + t("changeDl") + "</button>"
+          );
+          // 路径可点击复制
+          document.querySelectorAll(".copyable").forEach(function (el) {
+            var p = el.getAttribute("data-path");
+            el.title = p + "（" + t("copying").replace(/[（()）]/g, "") + "）";
+            el.classList.add("ellipsis");
+            el.style.cursor = "pointer";
+            // 左键点击复制
+            el.addEventListener("click", function () { copyText(p); });
+          });
+          var db = $("change-dl-btn");
+          if (db) db.hidden = !s.desktop;
+          if (db) db.onclick = function () { changeDownloadDir(); };
+          $("lang-toggle").textContent = lang === "zh" ? "EN" : "中";
+        }).catch(function (e) {
+          showBadge(t("stErr"), "err");
+          setStatus(t("stNoEnv") + "：" + escapeHtml(e && e.message || e));
+        });
+      }
+
+      function changeDownloadDir() {
+        // 桌面：目录选择器；无点击回退到手动输入
+        invoke("pick_directory").then(function (dir) {
+          if (!dir) return;
+          invoke("set_download_dir", { path: dir }).then(function (resolved) {
+            log(t("dlChanged") + ": " + resolved, "ok");
+            refreshStatus();
+          }).catch(function (e) { log(t("dlChangeFail") + ": " + (e && e.message || e), "err"); });
+        }).catch(function () {
+          // 无 pick_directory（Android）或失败：提示
+          log(t("dlChangeFail"), "err");
+        });
+      }
+
+      /* ---------- 附近设备 ---------- */
+      var selectedFile = null;
+      var peersRenderKey = "";
+
+      function refreshPeers() {
+        invoke("list_peers").then(function (peers) {
+          peers = peers || [];
+          var nextRenderKey = JSON.stringify([
+            lang,
+            !!selectedFile,
+            peers.map(function (p) { return [p.id, p.name, p.addr, p.port]; })
+          ]);
+          if (nextRenderKey === peersRenderKey) return;
+          peersRenderKey = nextRenderKey;
+          var ul = $("peers");
+          ul.innerHTML = "";
+          if (!peers.length) {
+            ul.innerHTML = '<li class="empty">' + escapeHtml(t("peersNone")) + "</li>";
+            return;
+          }
+          peers.forEach(function (p) {
+            var li = document.createElement("li");
+            var ico = document.createElement("span"); ico.className = "device-ico"; ico.textContent = "🖥";
+            var name = document.createElement("div"); name.className = "name"; name.textContent = p.name;
+            var meta = document.createElement("div"); meta.className = "meta";
+            meta.textContent = p.addr ? (p.addr + " · " + p.port) : ("端口 " + p.port);
+            var btn = document.createElement("button");
+            btn.textContent = t("sent");
+            btn.disabled = !selectedFile;
+            btn.onclick = function () {
+              if (!selectedFile) { log(t("selectFirst"), "err"); return; }
+              btn.disabled = true;
+              log(t("sendStarted") + " " + selectedFile.name + " → " + p.name, "info");
+              invoke("send_to_peer", { path: selectedFile.path, peerId: p.id })
+                .then(function (r) {
+                  log(t("sendDone") + ": " + r.file_name + "（" + r.bytes_sent + " " + t("bytes") + "）", "ok");
+                  btn.disabled = false;
+                })
+                .catch(function (e) {
+                  log(t("sendFail") + ": " + (e && e.message || e), "err");
+                  btn.disabled = false;
+                });
+            };
+            li.appendChild(ico); li.appendChild(name); li.appendChild(meta); li.appendChild(btn);
+            ul.appendChild(li);
+          });
+        }).catch(function (e) {
+          $("peers").innerHTML = '<li class="empty">' + escapeHtml(t("peersFail")) + "：" + escapeHtml(e && e.message || e) + "</li>";
+        });
+      }
+
+      /* ---------- 文件选择 ---------- */
+      function selectPath(path) {
+        invoke("stat_file", { path: path }).then(function (r) {
+          selectedFile = { name: r[0], size: r[1], path: path };
+          var fi = $("fileInfo");
+          fi.innerHTML = t("selected") + ': <span class="ellipsis copyable" data-path="' + escapeHtml(path) + '">' +
+            escapeHtml(path) + "</span>（" + (r[1] / 1024).toFixed(1) + " KB）" +
+            '<span style="color:var(--muted)">' + t("copying") + "</span>";
+          fi.classList.add("show");
+          var cpE = fi.querySelector(".copyable");
+          cpE.title = path;
+          cpE.style.cursor = "pointer";
+          // 左键点击复制
+          cpE.addEventListener("click", function () { copyText(path); });
+          refreshPeers();
+        }).catch(function (e) {
+          log(t("fileOpenFail") + ": " + (e && e.message || e), "err");
+        });
+      }
+
+      function pickFile() {
+        invoke("pick_file").then(function (p) {
+          if (p) selectPath(p);
+        }).catch(function (e) {
+          log(t("errPickFile") + ": " + (e && e.message || e), "err");
+        });
+      }
+
+      /* ---------- 远程：统一单连接码 ---------- */
+      var receiveCode = "";
+      var receiveStarting = false;
+      var pendingReceiveEvent = null;
+
+      function finishRemoteReceive(d, failed) {
+        if (receiveStarting) { pendingReceiveEvent = { data: d, failed: failed }; return; }
+        if (!receiveCode || d.room_code !== receiveCode) return;
+        if (failed) log(t("recvFail") + ": " + (d.message || t("recvFail")), "err");
+        else log(t("recvDone") + ": " + d.file_name + "（" + d.bytes_written + " " + t("bytes") + "）→ " + d.saved_path, "ok");
+        receiveCode = "";
+        renderReceiveCode();
+        $("recv-start").style.display = "";
+        $("recv-stop").style.display = "none";
+      }
+
+      function renderReceiveCode() {
+        var box = $("recv-codes");
+        box.innerHTML = "";
+        if (receiveCode) {
+          var item = document.createElement("div"); item.className = "code-item";
+          var code = document.createElement("span"); code.className = "ccode";
+          code.textContent = receiveCode; code.title = receiveCode;
+          code.addEventListener("click", function () { copyText(receiveCode); });
+          var btn = document.createElement("button"); btn.className = "ghost"; btn.textContent = t("recvCopy");
+          btn.onclick = function () { copyText(receiveCode); };
+          item.appendChild(code); item.appendChild(btn);
+          box.appendChild(item);
+        }
+        if (receiveCode) {
+          $("recv-status").textContent = t("recvListening");
+        } else {
+          $("recv-status").textContent = "";
+        }
+      }
+
+      $("recv-start").onclick = function () {
+        $("recv-start").disabled = true;
+        receiveStarting = true;
+        pendingReceiveEvent = null;
+        invoke("start_remote_receive").then(function (code) {
+          receiveCode = code;
+          renderReceiveCode();
+          copyText(code);
+          $("recv-start").style.display = "none";
+          $("recv-stop").style.display = "";
+        }).catch(function (e) {
+          log(t("startRecvFail") + ": " + (e && e.message || e), "err");
+        }).finally(function () {
+          $("recv-start").disabled = false;
+          receiveStarting = false;
+          if (pendingReceiveEvent) {
+            finishRemoteReceive(pendingReceiveEvent.data, pendingReceiveEvent.failed);
+            pendingReceiveEvent = null;
+          }
+        });
+      };
+
+      $("recv-stop").onclick = function () {
+        invoke("stop_remote_receive").then(function () {
+          receiveCode = "";
+          renderReceiveCode();
+          $("recv-start").style.display = "";
+          $("recv-stop").style.display = "none";
+          log(t("recvStopped"), "info");
+        }).catch(function (e) {
+          log(t("startRecvFail") + ": " + (e && e.message || e), "err");
+        });
+      };
+
+      $("remote-send-btn").onclick = function () {
+        if (!selectedFile) { log(t("selectFirst"), "err"); return; }
+        var code = $("room-code").value.trim();
+        if (!code) { log(t("codeRequired"), "err"); return; }
+        log(t("sendStarted") + " " + selectedFile.name, "info");
+        $("remote-send-btn").disabled = true;
+        invoke("remote_send_file", { path: selectedFile.path, roomCode: code }).then(function (r) {
+          log(t("sendDone") + ": " + r.file_name + "（" + r.bytes + " " + t("bytes") + "）", "ok");
+        }).catch(function (e) {
+          log(t("sendFail") + ": " + (e && e.message || e), "err");
+        }).finally(function () {
+          $("remote-send-btn").disabled = false;
+        });
+      };
+
+      // 自动格式化连接码输入（4 字符一组）
+      $("room-code").addEventListener("input", function () {
+        var v = this.value.toUpperCase().replace(/[^A-HJ-NP-Z2-9]/g, "").slice(0, 16);
+        var out = "";
+        for (var i = 0; i < v.length; i++) {
+          if (i > 0 && i % 4 === 0) out += "-";
+          out += v[i];
+        }
+        this.value = out;
+      });
+
+      $("refresh").onclick = function () { refreshPeers(); };
+
+      /* ---------- 拖放（Tauri 2 原生事件）---------- */
+      var drop = $("drop");
+      drop.onclick = function () { if (backendReady) pickFile(); };
+
+      function formatBytes(bytes) {
+        var units = ["B", "KiB", "MiB", "GiB", "TiB"], i = 0;
+        while (bytes >= 1024 && i < units.length - 1) { bytes /= 1024; i++; }
+        return (i ? bytes.toFixed(1) : String(bytes)) + " " + units[i];
+      }
+      var transferMeters = new Map();
+      function updateTransferProgress(d) {
+        var key = d.role + ":" + d.transfer_id;
+        var host = $("transfer-progress");
+        if (!d.active) {
+          var old = transferMeters.get(key);
+          if (old) old.remove();
+          transferMeters.delete(key);
+          host.hidden = transferMeters.size === 0;
+          return;
+        }
+        var row = transferMeters.get(key);
+        if (!row) {
+          row = document.createElement("div");
+          row.className = "transfer-meter";
+          var label = document.createElement("div"); label.className = "transfer-meter-label";
+          label.appendChild(document.createElement("span")); label.appendChild(document.createElement("span"));
+          row.appendChild(label); row.appendChild(document.createElement("progress"));
+          host.appendChild(row); transferMeters.set(key, row);
+        }
+        var percent = d.total ? Math.min(100, Math.floor(d.completed * 100 / d.total)) : 100;
+        var sending = d.role === "send";
+        var direction = document.body.dataset.lang === "en" ? (sending ? "Sending" : "Receiving") : (sending ? "发送" : "接收");
+        row.firstChild.firstChild.textContent = direction + " " + percent + "%";
+        row.firstChild.lastChild.textContent = formatBytes(d.completed) + " / " + formatBytes(d.total);
+        row.lastChild.max = d.total || 1;
+        row.lastChild.value = d.total ? d.completed : 1;
+        row.lastChild.setAttribute("aria-label", direction);
+        host.hidden = false;
+      }
+
+      function registerBackendEvents() {
+        var registrations = [
+          ["transfer-progress", function (e) { updateTransferProgress(e.payload); }],
+          ["tauri://drag-enter", function () { drop.classList.add("drag"); }],
+          ["tauri://drag-leave", function () { drop.classList.remove("drag"); }],
+          ["tauri://drag-drop", function (e) {
+          drop.classList.remove("drag");
+          var paths = (e.payload && e.payload.paths) || [];
+          if (paths.length) selectPath(paths[0]);
+          }],
+          ["transfer-completed", function (e) {
+          var d = e.payload;
+          log(t("recvDone") + ": " + d.file_name + "（" + d.bytes_written + " " + t("bytes") + "）→ " + d.saved_path, "ok");
+          }],
+          ["remote-receive-completed", function (e) {
+          finishRemoteReceive(e.payload || {}, false);
+          }],
+          ["remote-phase", function (e) {
+          var d = e.payload || {};
+          if (d.message) log(d.message, "info");
+          }],
+          ["remote-receive-failed", function (e) {
+          finishRemoteReceive(e.payload || {}, true);
+          }]
+        ];
+        var unlisten = [];
+        return registrations.reduce(function (pending, registration) {
+          return pending.then(function () {
+            return window.__TAURI__.event.listen(registration[0], registration[1]);
+          }).then(function (stop) { unlisten.push(stop); });
+        }, Promise.resolve()).catch(function (error) {
+          return Promise.all(unlisten.map(function (stop) { return stop(); }))
+            .then(function () { throw error; });
+        });
+      }
+
+      // Android may reject IPC while the initial local page is still being
+      // committed. Retry only read-only initialization, without relaxing ACLs.
+      // Do not enable receiving until completion listeners are registered.
+      function initializeBackend(attempt) {
+        return invoke("get_status").then(registerBackendEvents).then(function () {
+          backendReady = true;
+          refreshStatus();
+          refreshPeers();
+          $("recv-start").disabled = false;
+          $("remote-send-btn").disabled = false;
+          setInterval(refreshPeers, 3000);
+          refreshSignalingStatus();
+          setInterval(refreshSignalingStatus, 1000);
+        }).catch(function (error) {
+          if (attempt < 20) {
+            setTimeout(function () { initializeBackend(attempt + 1); }, 250);
+          } else {
+            showBadge(t("stErr"), "err");
+            setStatus(t("stNoEnv") + "：" + escapeHtml(error && error.message || error));
+          }
+        });
+      }
+
+      /* ---------- 启动 ---------- */
+      $("recv-start").disabled = true;
+      $("remote-send-btn").disabled = true;
+      applyLang();
+      initializeBackend(0);
+    })();
+  </script>
+  <div class="toast" id="toast">已复制</div>
+</body>
+</html>

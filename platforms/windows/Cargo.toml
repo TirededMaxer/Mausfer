@@ -1,0 +1,17 @@
+[package]
+name = "mausfer-windows"
+version.workspace = true
+edition.workspace = true
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+mausfer-core = { path = "../../core" }
+mausfer-tauri-common = { path = "../tauri-common" }
+tauri = { version = "2", features = [] }
+tauri-plugin-notification = "2"
+tauri-plugin-dialog = "2"
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]
